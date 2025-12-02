@@ -1,0 +1,1073 @@
+---
+title: "Nature Dependence through Value Chains | Norway"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    theme: cosmo
+    code_folding: hide
+---
+
+```{css, echo=FALSE}
+table {
+  float: left;
+}
+```
+
+Magnus Merkle (SSB), with Marte Lindseth (SSB) and Kristine Grimsrud (SSB)
+
+Naturregnskapsprosjekt, 27. October 2025
+
+\
+
+# Changelog
+
+Changes since version 1:
+
+-   added EXIOBASE-based analysis for comparison
+
+# Abstract and Limitation
+
+In this notebook we quantify the dependence of the Norwegian economy on nature's ecosystem services. We replicate a method adopted in an analysis for Europe, and apply it to the Norwegian context. A particular focus of our implementation is that we identify the regional variation of sector-wise dependence levels. We group regions into levels of rule of law, with the objective to add information on political risk to the analysis of nature-related risk. Our analysis relies on the following materials:
+
+-   Hirschbuehl et al. (2025) The EU economy's dependency on nature. European Commission: JRC Working Papers in Economics and Finance 2025/4.
+-   World Justice Project (2024) The World Justice Project Rule of Law Index 2024 Report. Washington DC: WJP.
+-   ....
+
+We compute dependence levels for the year 2025 and then over time since 1990 in five year steps.
+
+# 1. Filepaths and Functions
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# make space
+rm(list = ls())
+# packages
+library(dplyr)
+library(tidyr)
+library(openxlsx)
+library(readxl)
+library(Rfast)
+library(ggplot2)
+library(here)
+# filepath to the wd
+wfp<-file.path(here::here())
+# filepath to GLORIA
+gfp<-file.path("C:","Users","muk",
+               paste0("OneDrive - Statistisk sentralbyr","\U00E5"),
+               "data","GLORIA","v59")
+# file path to ENCORE
+nfp<-file.path("C:","Users","muk",
+               paste0("OneDrive - Statistisk sentralbyr","\U00E5"),
+               "data","ENCORE","Updated ENCORE knowledge base September 2025",
+               "ENCORE files")
+# file path to EXIOBASE
+efp<-file.path("C:","Users","muk",
+               paste0("OneDrive - Statistisk sentralbyr","\U00E5"),
+               "data","EXIOBASE")
+```
+
+# 2. Get data
+
+In this section we run scripts to import data, aggregate it to the desired resolution, and match it in preparation for the subsequent analysis.
+
+## 2.1 Import and Format GLORIA
+
+Here we import GLORIA multi-regional input-output data at the desired country-sector resolution. We loop across years, running an external script containing IO dataread and aggregation processes.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# dir.create(file.path(wfp,"dataimport","tmpdir"))
+# 
+# timestep<-"1990"
+# qcode<-"20231117"
+# mcode<-"20240110"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+# 
+# timestep<-"1995"
+# qcode<-"20231117"
+# mcode<-"20240110"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+# 
+# timestep<-"2000"
+# qcode<-"20231117"
+# mcode<-"20240111"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+# 
+# timestep<-"2005"
+# qcode<-"20231117"
+# mcode<-"20240111"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+# 
+# timestep<-"2010"
+# qcode<-"20231117"
+# mcode<-"20240111"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+# 
+# timestep<-"2015"
+# qcode<-"20231117"
+# mcode<-"20240111"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+# 
+# timestep<-"2020"
+# qcode<-"20231117"
+# mcode<-"20240111"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+# 
+# timestep<-"2025"
+# qcode<-"20231117"
+# mcode<-"20240111"
+# source(file.path(wfp,"dataimport","import_gloria_script.R"))
+
+# clean up environment
+rm(list=ls()[! ls() %in% c("nfp","efp","wfp")])
+```
+## 2.2 Import and Format EXIOBASE
+
+Just like H et al we import the 2022 tables. We make one adjustment that is necessary in order to avoid negative value added cases. Negative value added happens when intermediate input to a sector exceeds its total output. We aggregate all sectors withing processing of meat (i.e. no differentiation between processing of poultry, cattle, etc) and we aggregate meat animals nec together with animal products nec. This step should not have any impact on the result, because nature dependency scores for the aggregated sectors do not vary. Our aggregation implies that we work with a 159 sector resolution of EXIOBASE.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# dir.create(file.path(wfp,"dataimport","tmpdir"))
+
+# timestep <- "2022"
+# source(file.path(wfp,"dataimport","import_exiobase_script.R"))
+
+# clean up environment
+rm(list=ls()[! ls() %in% c("nfp","wfp")])
+```
+
+
+## 2.3 Import and Format ENCORE for GLORIA
+
+Here we import ENCORE nature dependency data. We also calculate consolidated dependency scores just as Hirschbuehl et al. do in their study.
+
+To revisit: currently we assume that ND and N/A imply zero dependency, and this pulls results downwards. An alternative could be to define them as NA, then they would "not count" in the calculation of averages. Not sure what H. et al. did.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# import data
+materd<-read.csv(file.path(nfp,"06. Dependency mat ratings.csv"))
+
+# first reformat for easier quantification
+materd<-materd %>% pivot_longer(-c("ISIC.Unique.code","ISIC.Section",
+                                   "ISIC.Division","ISIC.Group","ISIC.Class",
+                                   "ISIC.level.used.for.analysis"),
+                                names_to="ecosystem_service",
+                                values_to="rating")
+
+# then make it numeric so we can compute averages
+# MM I assume that "ND" and "N/A" imply zero dependency. To revisit later.
+materd['rating_n']<-NA
+materd$rating_n[materd$rating=="VL"]<-1
+materd$rating_n[materd$rating=="L"]<-2
+materd$rating_n[materd$rating=="M"]<-3
+materd$rating_n[materd$rating=="H"]<-4
+materd$rating_n[materd$rating=="VH"]<-5
+materd$rating_n[materd$rating=="ND"]<-0
+materd$rating_n[materd$rating=="N/A"]<-0
+
+# now we want "consolidated dependency scores" 
+# so first pivot wider again and remove the old rating variable
+materd <- materd %>% select(-rating) %>% 
+  pivot_wider(names_from = ecosystem_service,values_from=rating_n)
+
+# Then we compute the individual components of the consolidated score
+# number of different sectoral ecosystem dependencies
+materd['score1']<-NA
+# mean materiality rating across all
+materd['score2']<-NA
+# maxiumum strength across the individual dependencies
+materd['score3']<-NA
+
+# implement as loop across sectors
+# 25 different ecosystem services in colums 7 to 31 in our dataset
+for(i in 1:nrow(materd)){
+  # count how many of the values are larger than zero
+  materd$score1[i]<-sum(materd[i,7:31]>0)
+  # generate the mean
+  materd$score2[i]<-mean(as.numeric(materd[i,7:31]))
+  # identify the largest value
+  materd$score3[i]<-max(materd[i,7:31])
+}
+rm(i)
+
+# and then we compute the consolidate score just like H et al
+materd['c_score']<-((1/3)*materd$score1*(5/25))+((1/3)*materd$score2)+((1/3)*materd$score3)
+# let's only keep the consolidated score for now
+materd <- materd %>% select("ISIC.Unique.code","ISIC.Section","ISIC.Division",
+                            "ISIC.Group","ISIC.Class",
+                            "ISIC.level.used.for.analysis","c_score")
+```
+
+## 2.4 Map ENCORE to GLORIA
+
+Here we now map ENCORE to GLORIA and compute nature dependency scores for each GLORIA sector.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# first get a vector of GLORIA sector names
+sq <- read_excel(file.path(wfp,"dataimport","GLORIA_ReadMe_059_adj.xlsx"), 
+                         sheet = "Sectors") %>% 
+  select(Sector_names) %>% 
+  as.matrix() %>% as.character()
+
+# import concordance data
+concd <- read.xlsx(
+  file.path(wfp,"GLORIA_ISICr4_ENCORE_concordance.xlsx"),
+  sheet="Sectors")
+# make it a list
+concl<-list()
+for(i in 1:nrow(concd)){
+  concl[[i]]<- trimws(as.character(unlist(strsplit(concd$ENCORE_ISIC_codes[i], ";"))))
+}
+# trimws is required because we get leading spaces otherwise...
+names(concl)<-concd$Sector_names
+# so now we have for each GLORIA sector the vector of unique ENCORE-ISIC-sectors.
+
+# then make a dataframe where we calculate the average dependency score for each GLORIA sector
+dfc<-as.data.frame(cbind(sq,NA))
+colnames(dfc)<-c("sq","dependency_score")
+
+# then loop across to get the average score for each GLORIA sector
+for(i in 1:nrow(dfc)){
+  dfc$dependency_score[i]<-mean(materd$c_score[materd$ISIC.Unique.code %in% concl[[i]]])
+}
+# for some reason the mean scores are saved as characters. MM check later.
+dfc$dependency_score <- as.numeric(dfc$dependency_score)
+
+# clean up
+rm(concd,concl,materd,i)
+```
+
+## 2.5 Map ENCORE to EXIOBASE
+
+This step we do not need to do, because we can just take the data ready from H et al. It is in their appendix (table A.9).
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# all in one excel sheet copied from the appendix
+exdfc<-read_excel(file.path(wfp,"exiobase_sector_nature_dep.xlsx"),sheet="dep") %>%
+  select(c(Sector_name,ENCORE_2024)) %>%
+  mutate(ENCORE_2024 = as.numeric(ENCORE_2024)) %>%
+  rename(sq=Sector_name)
+```
+
+
+## 2.6 Dependency Threholds
+
+Hirschbuehl et al. adopt the following ENCORE dependency ratings:
+
+-   A score below 2.25 is LOW
+-   A score between 2.25 and 3.25 is MEDIUM
+-   A score above 3.25 is HIGH
+We adopt the same thresholds here.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# define rating for gloria
+dfc['dependency_rating']<-NA
+dfc$dependency_rating[dfc$dependency_score<2.25] <- "LOW"
+dfc$dependency_rating[dfc$dependency_score>3.25] <- "HIGH"
+dfc$dependency_rating[dfc$dependency_score>=2.25 & dfc$dependency_score<=3.25] <- "MEDIUM"
+
+# define rating for exionbase
+exdfc['dependency_rating']<-NA
+exdfc$dependency_rating[exdfc$ENCORE_2024<2.25] <- "LOW"
+exdfc$dependency_rating[exdfc$ENCORE_2024>3.25] <- "HIGH"
+exdfc$dependency_rating[exdfc$ENCORE_2024>=2.25 & exdfc$ENCORE_2024<=3.25] <- "MEDIUM"
+```
+
+
+# 3. Compute Direct and Supply Chain Value Added
+
+## 3.1 Overview
+
+This step involves a little bit of linear algebra, which is well documented by Hirschbuehl et al. The inputs to this process are the IO coefficients matrix $A$, the matrix of value-added shares $\hat{V}$, and the final demand vector $y$.
+
+## 3.2 Function for GLORIA
+
+We create a function that we can then run for each year we are interested in.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# make a function
+va_compute <- function(yr){
+#### Step 1: Import formatted GLORIA data
+load(file.path(wfp,"dataimport","tmpdir",paste0("gloria_",yr,".RData")))
+
+#### Step 2: Create total output
+# First the rowsums of the transaction matrix
+aggz<-z %*% matrix(rep(1,times=ncol(z)),ncol=1)
+# Then the rowsums of the final demand matrix
+aggy<-y %*% matrix(rep(1,times=ncol(y)),ncol=1)
+# Then the sum of both for total outpt
+x<-aggz + aggy
+# clean up
+rm(aggz)
+
+#### Step 3: Create technical coefficients matrix
+# first the inverse
+xinv<-x^-1
+xinvv<-as.vector(xinv)
+xinvvd<-diag(xinvv)
+# then the matrix
+a <- mat.mult(z,xinvvd)
+# clean up
+rm(xinv,xinvv,xinvvd)
+# check results. 
+# check if any NAs. If so, then thats probably due to zero outputs. Confirm. Then turn NAs into zeros.
+zocases<-paste(round(100*length(a[is.na(a)])/length(a),digits = 2),"%",sep=" ")
+a[is.na(a)]<-0
+
+#### Step 4: Calculate Leontief matrix
+# first we need an identity matrix
+I<-diag(ncol(z))
+# then I minus the technical coefficients matrix
+I_a<-I-a
+# then the leontief inverse
+leo<-solve(I_a)
+# add labels
+colnames(leo)<-colnames(z)
+rownames(leo)<-rownames(z)
+# clean up
+rm(I_a)
+
+#### Step 5: Create value-added shares (following H et al.)
+# I create a unity vector for the aggregation operations
+# premultiplication with a rowvector of ones gives sums across rows (columnsums)
+# postmultiplication with a columnvector of ones gives sums across columns (rowsums)
+u <- matrix(rep(1,times=nrow(z)),ncol=1)
+# Identity matrix minus the diagonalised sum across rows of A.
+vh <- I - diag(as.vector(t(u) %*% a))
+# clean up
+rm(I,v,a,z)
+
+#### Step 6: Create diagonalised demand vector
+yh <- diag(as.vector(aggy))
+
+#### Step 7: Compute the Tv matrix (following H et al.)
+Tv <- vh %*% leo %*% yh
+
+#### Step 8: Compute direct value added (following H et al.)
+# this is just a subsetting process. We need the diagonal elements
+# I do this by using the hadamard product with the identity matrix
+tvd <- (Tv * diag(as.vector(u))) %*% u
+# Subsetting Norway from this
+tvdn<- as.vector(tvd)[which(fcq=="Norway")]
+
+#### Step 9: Compute upstream value added (following H et al.)
+# this is just a subsetting process. Sum along columns (across rows) and substract tvd
+uu<-matrix(data=0,nrow=nrow(Tv),ncol=ncol(Tv))
+uu[,which(fcq=="Norway")]<-1
+# blank out diagonal
+diag(uu)<-0
+# apply to Tv (hadamard)
+tvu <- Tv * uu
+# keep only relevant columns
+tvun <- tvu[,which(fcq=="Norway")]
+# add labels
+tvun <- as.data.frame(cbind(fcq,fsq,tvun))
+colnames(tvun)<-c("fcq","fsq",sq) 
+# clean up
+rm(uu,tvu)
+
+#### Step 10: Compute downstream value added (following H et al.)
+# this is just a subsetting process. Sum along rows (across columns) and substract tvd
+uf<-matrix(data=0,nrow=nrow(Tv),ncol=ncol(Tv))
+uf[which(fcq=="Norway"),]<-1
+# blank out diagonal
+diag(uf)<-0
+# apply to Tv (hadamard)
+tvf <- Tv * uf
+# keep only relevant rows
+tvfn <- tvf[which(fcq=="Norway"),]
+# transpose and then add labels
+tvfn <- t(tvfn)
+tvfn <- as.data.frame(cbind(fcq,fsq,tvfn))
+colnames(tvfn)<-c("fcq","fsq",sq) 
+# clean up
+rm(uf,tvf)
+
+#### Step 11: Put all into a dataframe
+tvun['scope']<-"upstream"
+tvfn['scope']<-"downstream"
+# move together and pivot
+df<-rbind(tvun,tvfn)
+df <- df %>% pivot_longer(-c(scope,fcq,fsq),names_to = "sector",values_to = "va")
+# add direct
+dd<-as.data.frame(matrix(ncol=ncol(df),nrow=length(tvdn)))
+colnames(dd)<-colnames(df)
+dd$scope <- "direct"
+dd$sector <- unique(fsq)
+dd$fsq <- unique(fsq)
+dd$fcq <- "Norway"
+dd$va <- tvdn
+# and join with upstream and downstream accounts
+da <- rbind(dd,df)
+da['year'] <- yr
+da['zocases'] <- zocases
+# make sure value added is saved as numeric variable
+da$va <- as.numeric(da$va)
+# clean up
+rm(aggy,dd,df,leo,Tv,tvd,u,vh,x,y,yh,yq,zq,fcq,fsq,tvdn,zocases)
+# return result
+return(da)
+}
+```
+
+## 3.3 Run for GLORIA
+
+Here we loop across years.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# then run the function across years
+val<-list()
+yrs<-seq(1990,2025,5)
+for(l in 1:length(yrs)){
+  val[[l]] <- va_compute(yrs[l])
+}
+vad <- do.call("rbind",val)
+rm(val,l,sq)
+```
+
+## 3.4 Run for EXIOBASE
+
+Only a single year, no looping required. Same steps as with GLORIA.
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+
+#### Step 1: Import formatted EXIOBASE data
+yr=2022
+load(file.path(wfp,"dataimport","tmpdir",paste0("exiobase_",yr,".RData")))
+
+#### Step 2: Create total output
+# First the rowsums of the transaction matrix
+aggz<-z %*% matrix(rep(1,times=ncol(z)),ncol=1)
+# Then the rowsums of the final demand matrix
+aggy<-y %*% matrix(rep(1,times=ncol(y)),ncol=1)
+# Then the sum of both for total outpt
+x<-aggz + aggy
+# clean up
+rm(aggz)
+
+#### Step 3: Create technical coefficients matrix
+# first the inverse
+xinv<-x^-1
+xinvv<-as.vector(xinv)
+xinvvd<-diag(xinvv)
+# then the matrix
+a <- mat.mult(z,xinvvd)
+# clean up
+rm(xinv,xinvv,xinvvd)
+# check results. 
+# check if any NAs. If so, then thats probably due to zero outputs. Confirm. Then turn NAs into zeros.
+zocases<-paste(round(100*length(a[is.na(a)])/length(a),digits = 2),"%",sep=" ")
+a[is.na(a)]<-0
+
+#### Step 4: Calculate Leontief matrix
+# first we need an identity matrix
+I<-diag(ncol(z))
+# then I minus the technical coefficients matrix
+I_a<-I-a
+# then the leontief inverse
+leo<-solve(I_a)
+# add labels
+colnames(leo)<-colnames(z)
+rownames(leo)<-rownames(z)
+# clean up
+rm(I_a)
+
+#### Step 5: Create value-added shares (following H et al.)
+# I create a unity vector for the aggregation operations
+# premultiplication with a rowvector of ones gives sums across rows (columnsums)
+# postmultiplication with a columnvector of ones gives sums across columns (rowsums)
+u <- matrix(rep(1,times=nrow(z)),ncol=1)
+# Identity matrix minus the diagonalised sum across rows of A.
+vh <- I - diag(as.vector(t(u) %*% a))
+# clean up
+rm(I,v,a,z)
+
+###################
+#### Step 6: Create diagonalised demand vector
+yh <- diag(as.vector(aggy))
+
+#### Step 7: Compute the Tv matrix (following H et al.)
+Tv <- vh %*% leo %*% yh
+
+#### Step 8: Compute direct value added (following H et al.)
+# this is just a subsetting process. We need the diagonal elements
+# I do this by using the hadamard product with the identity matrix
+tvd <- (Tv * diag(as.vector(u))) %*% u
+# Subsetting Norway from this
+tvdn<- as.vector(tvd)[which(fcq=="Norway")]
+
+#### Step 9: Compute upstream value added (following H et al.)
+# this is just a subsetting process. Sum along columns (across rows) and substract tvd
+uu<-matrix(data=0,nrow=nrow(Tv),ncol=ncol(Tv))
+uu[,which(fcq=="Norway")]<-1
+# blank out diagonal
+diag(uu)<-0
+# apply to Tv (hadamard)
+tvu <- Tv * uu
+# keep only relevant columns
+tvun <- tvu[,which(fcq=="Norway")]
+# add labels
+tvun <- as.data.frame(cbind(fcq,fsq,tvun))
+colnames(tvun)<-c("fcq","fsq",unique(fsq)) 
+# clean up
+rm(uu,tvu)
+
+#### Step 10: Compute downstream value added (following H et al.)
+# this is just a subsetting process. Sum along rows (across columns) and substract tvd
+uf<-matrix(data=0,nrow=nrow(Tv),ncol=ncol(Tv))
+uf[which(fcq=="Norway"),]<-1
+# blank out diagonal
+diag(uf)<-0
+# apply to Tv (hadamard)
+tvf <- Tv * uf
+# keep only relevant rows
+tvfn <- tvf[which(fcq=="Norway"),]
+# transpose and then add labels
+tvfn <- t(tvfn)
+tvfn <- as.data.frame(cbind(fcq,fsq,tvfn))
+colnames(tvfn)<-c("fcq","fsq",unique(fsq)) 
+# clean up
+rm(uf,tvf)
+
+#### Step 11: Put all into a dataframe
+tvun['scope']<-"upstream"
+tvfn['scope']<-"downstream"
+# move together and pivot
+df<-rbind(tvun,tvfn)
+df <- df %>% pivot_longer(-c(scope,fcq,fsq),names_to = "sector",values_to = "va")
+# add direct
+dd<-as.data.frame(matrix(ncol=ncol(df),nrow=length(tvdn)))
+colnames(dd)<-colnames(df)
+dd$scope <- "direct"
+dd$sector <- unique(fsq)
+dd$fsq <- unique(fsq)
+dd$fcq <- "Norway"
+dd$va <- tvdn
+# and join with upstream and downstream accounts
+de <- rbind(dd,df)
+de['year'] <- yr
+de['zocases'] <- zocases
+# make sure value added is saved as numeric variable
+de$va <- as.numeric(de$va)
+# clean up
+rm(aggy,dd,df,leo,Tv,tvd,u,vh,x,y,yh,yq,zq,fcq,fsq,tvdn,zocases)
+# naming similar to GLORIA
+vade<-de
+vade['year']<-yr
+rm(de,yr)
+```
+
+
+# 4. Compute Disaggregated Nature Dependency Accounts
+
+Now here is where we use the disaggregated value added data from step 3 to compute nature dependency for each sector of interest. Hirschbuehl et al. aggregate their sectors to a 23 sector classification. We do the same, with one minor difference for the GLORIA-based version: we group insurance and asset management together with banking and capital markets (because GLORIA does not allow distinguishing between two sectors here).
+
+## 4.1 Function for GLORIA
+
+We'll use a function again which we can then apply to loop across years
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+
+depend_compute<-function(yr){
+## here is our aggregation dataframe
+adf <- read_excel(file.path(wfp,"dataimport","GLORIA_ReadMe_059_adj.xlsx"), 
+                  sheet = "Sectors")
+# We need a list giving us the sectors in each category
+agl<-list()
+for(i in 1:max(adf$AGG_sector,na.rm=T)){
+  # data structure
+  agl[[i]]<-list()
+  agl[[i]] <- list(HIGH = NULL, MEDIUM = NULL, LOW = NULL)
+  # high dep sectors
+  vec<-dfc %>% filter(sq %in% adf$Sector_names[adf$AGG_sector_match==i]) %>%
+    filter(dependency_rating=="HIGH") %>%
+    select(sq) %>% as.matrix() %>% as.vector()
+  agl[[i]][["HIGH"]] <- if (length(vec) == 0) NULL else vec
+  rm(vec)
+  # medium dep sectors
+  vec<-dfc %>% filter(sq %in% adf$Sector_names[adf$AGG_sector_match==i]) %>%
+    filter(dependency_rating=="MEDIUM") %>%
+    select(sq) %>% as.matrix() %>% as.vector()
+  agl[[i]][["MEDIUM"]] <- if (length(vec) == 0) NULL else vec
+  rm(vec)
+  # low dep sectors
+  vec<-dfc %>% filter(sq %in% adf$Sector_names[adf$AGG_sector_match==i]) %>%
+    filter(dependency_rating=="LOW") %>%
+    select(sq) %>% as.matrix() %>% as.vector()
+  agl[[i]][["LOW"]] <- if (length(vec) == 0) NULL else vec
+  rm(vec)
+}
+names(agl)<-adf$AGG_sector_name[1:length(agl)]
+
+# start with direct dependency
+dd<-as.data.frame(matrix(nrow=max(adf$AGG_sector,na.rm=T),ncol=8))
+colnames(dd)<-c("year","scope","region","sector","va","low_dep_va","medium_dep_va","high_dep_va")
+dd$year <- yr
+dd$scope <- "direct"
+dd$region <- "Norway"
+dd$sector <- adf$AGG_sector_name[1:max(adf$AGG_sector,na.rm=T)]
+# loop across sectors
+for(i in 1:nrow(dd)){
+  # first total value added
+  dd$va[i] <- sum(vad$va[vad$year==yr & vad$scope=="direct" & vad$sector %in% adf$Sector_names[adf$AGG_sector_match==i]])
+  dd$low_dep_va[i] <- sum(vad$va[vad$year==yr & vad$scope=="direct" & vad$fsq %in% agl[[i]][['LOW']]])
+  dd$medium_dep_va[i] <- sum(vad$va[vad$year==yr & vad$scope=="direct" & vad$fsq %in% agl[[i]][['MEDIUM']]])
+  dd$high_dep_va[i] <- sum(vad$va[vad$year==yr & vad$scope=="direct" & vad$fsq %in% agl[[i]][['HIGH']]])
+}
+rm(i)
+
+# then upstream dependency
+# I implement this as a loop within a loop for easier debugging
+dul<-list()
+rgs<-unique(vad$fcq)
+for(r in 1:length(rgs)){
+  du<-as.data.frame(matrix(nrow=max(adf$AGG_sector,na.rm=T),ncol=8))
+  colnames(du)<-c("year","scope","region","sector","va","low_dep_va","medium_dep_va","high_dep_va")
+  du$year <- yr
+  du$scope <- "upstream"
+  du$region <- rgs[r]
+  du$sector <- adf$AGG_sector_name[1:max(adf$AGG_sector,na.rm=T)]
+  # loop across sectors
+  for(i in 1:nrow(du)){
+    # first total value added
+    du$va[i] <- sum(vad$va[vad$year==yr & vad$scope=="upstream" & vad$sector %in% adf$Sector_names[adf$AGG_sector_match==i]])
+    du$low_dep_va[i] <- vad %>% filter(year==yr,
+                                       scope=="upstream",
+                                       fcq==rgs[r],
+                                       sector %in% adf$Sector_names[adf$AGG_sector_match==i],
+                                       fsq %in% dfc$sq[dfc$dependency_rating=="LOW"]) %>% select(va) %>% sum()
+    du$medium_dep_va[i] <- vad %>% filter(year==yr,
+                                          scope=="upstream",
+                                          fcq==rgs[r],
+                                          sector %in% adf$Sector_names[adf$AGG_sector_match==i],
+                                          fsq %in% dfc$sq[dfc$dependency_rating=="MEDIUM"]) %>% select(va) %>% sum()
+    du$high_dep_va[i] <- vad %>% filter(year==yr,
+                                        scope=="upstream",
+                                        fcq==rgs[r],
+                                        sector %in% adf$Sector_names[adf$AGG_sector_match==i],
+                                        fsq %in% dfc$sq[dfc$dependency_rating=="HIGH"]) %>% select(va) %>% sum()
+  }
+  rm(i)
+  dul[[r]]<-du
+  rm(du)
+}
+dud<-do.call("rbind",dul)
+rm(dul)
+
+# then downstream dependency
+dfl<-list()
+rgs<-unique(vad$fcq)
+for(r in 1:length(rgs)){
+  df<-as.data.frame(matrix(nrow=max(adf$AGG_sector,na.rm=T),ncol=8))
+  colnames(df)<-c("year","scope","region","sector","va","low_dep_va","medium_dep_va","high_dep_va")
+  df$year <- yr
+  df$scope <- "downstream"
+  df$region <- rgs[r]
+  df$sector <- adf$AGG_sector_name[1:max(adf$AGG_sector,na.rm=T)]
+  # loop across sectors
+  for(i in 1:nrow(df)){
+    # first total value added
+    df$va[i] <- sum(vad$va[vad$year==yr & vad$scope=="downstream" & vad$sector %in% adf$Sector_names[adf$AGG_sector_match==i]])
+    df$low_dep_va[i] <- vad %>% filter(year==yr,
+                                       scope=="downstream",
+                                       fcq==rgs[r],
+                                       sector %in% adf$Sector_names[adf$AGG_sector_match==i],
+                                       fsq %in% dfc$sq[dfc$dependency_rating=="LOW"]) %>% select(va) %>% sum()
+    df$medium_dep_va[i] <- vad %>% filter(year==yr,
+                                          scope=="downstream",
+                                          fcq==rgs[r],
+                                          sector %in% adf$Sector_names[adf$AGG_sector_match==i],
+                                          fsq %in% dfc$sq[dfc$dependency_rating=="MEDIUM"]) %>% select(va) %>% sum()
+    df$high_dep_va[i] <- vad %>% filter(year==yr,
+                                        scope=="downstream",
+                                        fcq==rgs[r],
+                                        sector %in% adf$Sector_names[adf$AGG_sector_match==i],
+                                        fsq %in% dfc$sq[dfc$dependency_rating=="HIGH"]) %>% select(va) %>% sum()
+  }
+  rm(i)
+  dfl[[r]]<-df
+  rm(df)
+}
+dfd<-do.call("rbind",dfl)
+rm(dfl)
+
+
+# then add together
+da<-rbind(dd,dud,dfd)
+# clean up
+rm(dd,dud,dfd)
+# return result
+return(da)
+}
+```
+
+## 4.2 Run for GLORIA
+
+Here we loop across years.
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# then run the function across years
+dpl<-list()
+for(l in 1:length(yrs)){
+  dpl[[l]] <- depend_compute(yrs[l])
+}
+dpd <- do.call("rbind",dpl)
+rm(dpl,l)
+# and then create percent values
+dpd['low']<-100*dpd$low_dep_va/dpd$va
+dpd['medium']<-100*dpd$medium_dep_va/dpd$va
+dpd['high']<-100*dpd$high_dep_va/dpd$va
+```
+
+## 4.3 Run for EXIOBASE
+
+```{r, results = 'hide', message = FALSE, warning=FALSE}
+# timestep
+yr=2022
+
+## here is our aggregation dataframe
+adf <- read_excel(file.path(wfp,"dataimport","EXIOBASE_Aggregation.xlsx"), 
+                  sheet = "Sectors")
+
+# We need a list giving us the sectors in each category
+agl<-list()
+for(i in 1:max(adf$AGG_sector,na.rm=T)){
+  # data structure
+  agl[[i]]<-list()
+  agl[[i]] <- list(HIGH = NULL, MEDIUM = NULL, LOW = NULL)
+  # high dep sectors
+  vec<-exdfc %>% filter(sq %in% adf$MM_sector_name[adf$AGG_sector_match==i]) %>%
+    filter(dependency_rating=="HIGH") %>%
+    select(sq) %>% as.matrix() %>% as.vector()
+  agl[[i]][["HIGH"]] <- if (length(vec) == 0) NULL else vec
+  rm(vec)
+  # medium dep sectors
+  vec<-exdfc %>% filter(sq %in% adf$MM_sector_name[adf$AGG_sector_match==i]) %>%
+    filter(dependency_rating=="MEDIUM") %>%
+    select(sq) %>% as.matrix() %>% as.vector()
+  agl[[i]][["MEDIUM"]] <- if (length(vec) == 0) NULL else vec
+  rm(vec)
+  # low dep sectors
+  vec<-exdfc %>% filter(sq %in% adf$MM_sector_name[adf$AGG_sector_match==i]) %>%
+    filter(dependency_rating=="LOW") %>%
+    select(sq) %>% as.matrix() %>% as.vector()
+  agl[[i]][["LOW"]] <- if (length(vec) == 0) NULL else vec
+  rm(vec)
+}
+names(agl)<-adf$AGG_sector_name[1:length(agl)]
+
+# start with direct dependency
+dd<-as.data.frame(matrix(nrow=max(adf$AGG_sector,na.rm=T),ncol=8))
+colnames(dd)<-c("year","scope","region","sector","va","low_dep_va","medium_dep_va","high_dep_va")
+dd$year <- yr
+dd$scope <- "direct"
+dd$region <- "Norway"
+dd$sector <- adf$AGG_sector_name[1:max(adf$AGG_sector,na.rm=T)]
+# loop across sectors
+for(i in 1:nrow(dd)){
+  # first total value added
+  dd$va[i] <- sum(vade$va[vade$year==yr & vade$scope=="direct" & vade$sector %in% adf$MM_sector_name[adf$AGG_sector_match==i]])
+  dd$low_dep_va[i] <- sum(vade$va[vade$year==yr & vade$scope=="direct" & vade$fsq %in% agl[[i]][['LOW']]])
+  dd$medium_dep_va[i] <- sum(vade$va[vade$year==yr & vade$scope=="direct" & vade$fsq %in% agl[[i]][['MEDIUM']]])
+  dd$high_dep_va[i] <- sum(vade$va[vade$year==yr & vade$scope=="direct" & vade$fsq %in% agl[[i]][['HIGH']]])
+}
+rm(i)
+
+# then upstream dependency
+# I implement this as a loop within a loop for easier debugging
+dul<-list()
+rgs<-unique(vade$fcq)
+for(r in 1:length(rgs)){
+  du<-as.data.frame(matrix(nrow=max(adf$AGG_sector,na.rm=T),ncol=8))
+  colnames(du)<-c("year","scope","region","sector","va","low_dep_va","medium_dep_va","high_dep_va")
+  du$year <- yr
+  du$scope <- "upstream"
+  du$region <- rgs[r]
+  du$sector <- adf$AGG_sector_name[1:max(adf$AGG_sector,na.rm=T)]
+  # loop across sectors
+  for(i in 1:nrow(du)){
+    # first total value added
+    du$va[i] <- sum(vade$va[vade$year==yr & vade$scope=="upstream" & vade$sector %in% adf$MM_sector_name[adf$AGG_sector_match==i]])
+    du$low_dep_va[i] <- vade %>% filter(year==yr,
+                                       scope=="upstream",
+                                       fcq==rgs[r],
+                                       sector %in% adf$MM_sector_name[adf$AGG_sector_match==i],
+                                       fsq %in% exdfc$sq[exdfc$dependency_rating=="LOW"]) %>% select(va) %>% sum()
+    du$medium_dep_va[i] <- vade %>% filter(year==yr,
+                                          scope=="upstream",
+                                          fcq==rgs[r],
+                                          sector %in% adf$MM_sector_name[adf$AGG_sector_match==i],
+                                          fsq %in% exdfc$sq[exdfc$dependency_rating=="MEDIUM"]) %>% select(va) %>% sum()
+    du$high_dep_va[i] <- vade %>% filter(year==yr,
+                                        scope=="upstream",
+                                        fcq==rgs[r],
+                                        sector %in% adf$MM_sector_name[adf$AGG_sector_match==i],
+                                        fsq %in% exdfc$sq[exdfc$dependency_rating=="HIGH"]) %>% select(va) %>% sum()
+  }
+  rm(i)
+  dul[[r]]<-du
+  rm(du)
+}
+dud<-do.call("rbind",dul)
+rm(dul)
+
+# then downstream dependency
+dfl<-list()
+rgs<-unique(vade$fcq)
+for(r in 1:length(rgs)){
+  df<-as.data.frame(matrix(nrow=max(adf$AGG_sector,na.rm=T),ncol=8))
+  colnames(df)<-c("year","scope","region","sector","va","low_dep_va","medium_dep_va","high_dep_va")
+  df$year <- yr
+  df$scope <- "downstream"
+  df$region <- rgs[r]
+  df$sector <- adf$AGG_sector_name[1:max(adf$AGG_sector,na.rm=T)]
+  # loop across sectors
+  for(i in 1:nrow(df)){
+    # first total value added
+    df$va[i] <- sum(vade$va[vade$year==yr & vade$scope=="downstream" & vade$sector %in% adf$MM_sector_name[adf$AGG_sector_match==i]])
+    df$low_dep_va[i] <- vade %>% filter(year==yr,
+                                       scope=="downstream",
+                                       fcq==rgs[r],
+                                       sector %in% adf$MM_sector_name[adf$AGG_sector_match==i],
+                                       fsq %in% exdfc$sq[exdfc$dependency_rating=="LOW"]) %>% select(va) %>% sum()
+    df$medium_dep_va[i] <- vade %>% filter(year==yr,
+                                          scope=="downstream",
+                                          fcq==rgs[r],
+                                          sector %in% adf$MM_sector_name[adf$AGG_sector_match==i],
+                                          fsq %in% exdfc$sq[exdfc$dependency_rating=="MEDIUM"]) %>% select(va) %>% sum()
+    df$high_dep_va[i] <- vade %>% filter(year==yr,
+                                        scope=="downstream",
+                                        fcq==rgs[r],
+                                        sector %in% adf$MM_sector_name[adf$AGG_sector_match==i],
+                                        fsq %in% exdfc$sq[exdfc$dependency_rating=="HIGH"]) %>% select(va) %>% sum()
+  }
+  rm(i)
+  dfl[[r]]<-df
+  rm(df)
+}
+dfd<-do.call("rbind",dfl)
+rm(dfl)
+
+# then add together
+de<-rbind(dd,dud,dfd)
+# clean up
+rm(dd,dud,dfd)
+
+# naming and create percent values
+dpde<-de
+dpde['low']<-100*dpde$low_dep_va/dpde$va
+dpde['medium']<-100*dpde$medium_dep_va/dpde$va
+dpde['high']<-100*dpde$high_dep_va/dpde$va
+rm(de)
+```
+
+
+# 5. Result Plots
+
+## 5.1 Results for 2020 by Sector
+
+### 5.1.1 GLORIA
+
+```{r,message = FALSE, results = 'hide'}
+# define the same sector order as H et al in their plot
+sectord_gloria<-c("Agriculture","Forestry","Fishery and aquaculture",
+           "Mining and metals","Construction","Water utilities",
+           "Healthcare delivery","Aviation travel and tourism",
+           "Food beverages and tobacco","Supply chain and transport",
+           "Public services and others","Electricity",
+           "Chemical and materials industry","Electrocnics","Oil and gas",
+           "Real estate","Heat utilities","Automotive",
+           "Retail consumer goods and lifestyle","Information technology",
+           "Insurance asset management banking","Telecommunications")
+
+# then the plot
+pp<-dpd %>% filter(year==2020) %>% select(sector,scope,region,low,medium,high) %>% 
+  mutate(sector = factor(sector,levels = rev(sectord_gloria))) %>% 
+  group_by(sector,scope) %>% summarise(low = sum(low),medium = sum(medium),high=sum(high)) %>%
+  pivot_longer(-c(sector,scope),names_to = "va_dependency",values_to = "share") %>%
+  mutate(va_dependency = factor(va_dependency,levels=c("low","medium","high"))) %>%
+  mutate(scope = factor(scope,levels=c("direct","upstream","downstream")))
+ggplot(pp,aes(y=share,x=sector,fill=va_dependency)) + geom_bar(position="stack", stat="identity") +
+  scale_fill_manual(values=c("goldenrod1","darkorange2","red"), guide = guide_legend(reverse = TRUE))+
+  labs(title="Value added dependency on nature",
+       subtitle = "% of GVA") +
+  theme_bw() +
+  coord_flip() +
+  facet_wrap(~scope,nrow=1) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title = element_blank())
+```
+
+### 5.1.2 EXIOBASE
+
+```{r,message = FALSE, results = 'hide'}
+# order of sectors to align with H et al
+sectord_exio<-c("Agriculture","Forestry","Fishery and aquaculture",
+           "Mining and metals","Construction","Water utilities",
+           "Healthcare delivery","Aviation travel and tourism",
+           "Food beverages and tobacco","Supply chain and transport",
+           "Public services and others","Electricity",
+           "Chemical and materials industry","Electronics","Oil and gas",
+           "Real estate","Heat utilities","Automotive",
+           "Retail consumer goods and lifestyle","Information technology",
+           "Banking and capital markets","Insurance and asset management",
+           "Digital communications")
+# plot
+pp<-dpde %>% filter(year==2022) %>% select(sector,scope,region,low,medium,high) %>% 
+  mutate(sector = factor(sector,levels = rev(sectord_exio))) %>% 
+  group_by(sector,scope) %>% summarise(low = sum(low),medium = sum(medium),high=sum(high)) %>%
+  pivot_longer(-c(sector,scope),names_to = "va_dependency",values_to = "share") %>%
+  mutate(va_dependency = factor(va_dependency,levels=c("low","medium","high"))) %>%
+  mutate(scope = factor(scope,levels=c("direct","upstream","downstream")))
+ggplot(pp,aes(y=share,x=sector,fill=va_dependency)) + geom_bar(position="stack", stat="identity") +
+  scale_fill_manual(values=c("goldenrod1","darkorange2","red"), guide = guide_legend(reverse = TRUE))+
+  labs(title="Value added dependency on nature",
+       subtitle = "% of GVA") +
+  theme_bw() +
+  coord_flip() +
+  facet_wrap(~scope,nrow=1) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title = element_blank())
+```
+
+## 5.2 Results for 2020 by Region
+
+### 5.2.1 GLORIA
+
+Still for 2020.
+
+```{r,message = FALSE, results = 'hide'}
+rr<-dpd %>% filter(year==2020) %>% select(sector,scope,region,low_dep_va,medium_dep_va,high_dep_va) %>% 
+  group_by(scope,region) %>% summarise(low_dep_va=sum(low_dep_va), 
+                                       medium_dep_va=sum(medium_dep_va),
+                                       high_dep_va=sum(high_dep_va)) %>%
+  pivot_longer(-c(scope,region),names_to = "va_dependency",values_to = "va") %>%
+  mutate(scope = factor(scope,levels=c("direct","upstream","downstream"))) %>%
+  mutate(region = factor(region,levels = c("ROW","R5_Low_RLI_0_40",
+                                           "R4_Medium_Low_RLI_41_50",
+                                           "R3_Medium_RLI_51_60",
+                                           "R2_Medium_High_RLI_61_70",
+                                           "R1_High_RLI_71_100",
+                                           "Norway")))
+rr['va_byscope']<-NA
+rr$va_byscope[rr$scope=="direct"]<-sum(rr$va[rr$scope=="direct"])
+rr$va_byscope[rr$scope=="upstream"]<-sum(rr$va[rr$scope=="upstream"])
+rr$va_byscope[rr$scope=="downstream"]<-sum(rr$va[rr$scope=="downstream"])
+rr['va_share']<-100*rr$va/rr$va_byscope
+
+
+ggplot(rr,aes(y=va_share,x=region,fill=va_dependency)) + geom_bar(position="stack", stat="identity") +
+  scale_fill_manual(values=c("goldenrod1","darkorange2","red"), guide = guide_legend(reverse = TRUE))+
+   labs(title="Value added dependency on nature",
+       subtitle = "% of GVA") +
+  theme_bw() +
+  coord_flip() +
+  facet_wrap(~ scope,nrow=1) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title = element_blank())
+```
+
+### 5.2.3 EXIOBASE
+
+Year is 2022.
+
+```{r,message = FALSE, results = 'hide'}
+rr<-dpde %>% filter(year==2022) %>% select(sector,scope,region,low_dep_va,medium_dep_va,high_dep_va) %>% 
+  group_by(scope,region) %>% summarise(low_dep_va=sum(low_dep_va), 
+                                       medium_dep_va=sum(medium_dep_va),
+                                       high_dep_va=sum(high_dep_va)) %>%
+  pivot_longer(-c(scope,region),names_to = "va_dependency",values_to = "va") %>%
+  mutate(scope = factor(scope,levels=c("direct","upstream","downstream"))) %>%
+  mutate(region = factor(region,levels = c("ROW","R5_Low_RLI_0_40",
+                                           "R4_Medium_Low_RLI_41_50",
+                                           "R3_Medium_RLI_51_60",
+                                           "R2_Medium_High_RLI_61_70",
+                                           "R1_High_RLI_71_100",
+                                           "Norway")))
+rr['va_byscope']<-NA
+rr$va_byscope[rr$scope=="direct"]<-sum(rr$va[rr$scope=="direct"])
+rr$va_byscope[rr$scope=="upstream"]<-sum(rr$va[rr$scope=="upstream"])
+rr$va_byscope[rr$scope=="downstream"]<-sum(rr$va[rr$scope=="downstream"])
+rr['va_share']<-100*rr$va/rr$va_byscope
+
+
+ggplot(rr,aes(y=va_share,x=region,fill=va_dependency)) + geom_bar(position="stack", stat="identity") +
+  scale_fill_manual(values=c("goldenrod1","darkorange2","red"), guide = guide_legend(reverse = TRUE))+
+   labs(title="Value added dependency on nature",
+       subtitle = "% of GVA") +
+  theme_bw() +
+  coord_flip() +
+  facet_wrap(~ scope,nrow=1) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title = element_blank())
+```
+
+## 5.3 Results over Time
+
+Analysis over time so far only GLORIA-based.
+
+```{r,message = FALSE, results = 'hide'}
+tt<-dpd %>% select(year,sector,scope,low_dep_va,medium_dep_va,high_dep_va) %>%
+  pivot_longer(-c(sector,scope,year),names_to = "va_dependency",values_to = "va") %>%
+  group_by(year,scope,va_dependency) %>% summarise(va=sum(va)) %>%
+  pivot_wider(names_from = va_dependency,values_from=va) %>%
+  mutate(total=low_dep_va+medium_dep_va+high_dep_va) %>%
+  mutate(low = 100*low_dep_va/total) %>%
+  mutate(medium = 100*medium_dep_va/total) %>%
+  mutate(high = 100*high_dep_va/total) %>%
+  select(-c(low_dep_va,medium_dep_va,high_dep_va,total)) %>%
+  pivot_longer(-c(year,scope),names_to = "va_dependency",values_to = "va") %>%
+  mutate(va_dependency = factor(va_dependency,levels=c("low","medium","high"))) %>%
+  mutate(scope = factor(scope,levels=c("direct","upstream","downstream")))
+
+ggplot(tt,aes(y=va,x=year,fill=va_dependency)) + geom_area() +
+  scale_fill_manual(values=c("goldenrod1","darkorange2","red"),
+                    guide = guide_legend(reverse = TRUE))+
+  labs(title="Value added dependency on nature over time",
+       subtitle="% of [by-scope] GVA") +
+  scale_x_continuous(breaks = unique(tt$year))+
+  theme_bw() +
+  facet_wrap(~scope,nrow=1) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+And one more, disgaggregated by region
+
+```{r,message = FALSE, results = 'hide'}
+tr<-dpd %>% select(year,sector,scope,region,low_dep_va,medium_dep_va,high_dep_va) %>%
+  pivot_longer(-c(sector,scope,region,year),names_to = "va_dependency",values_to = "va") %>%
+  group_by(year,scope,va_dependency,region) %>% summarise(va=sum(va)) %>%
+  pivot_wider(names_from = va_dependency,values_from=va) %>%
+  mutate(total=low_dep_va+medium_dep_va+high_dep_va) %>%
+  mutate(low = 100*low_dep_va/total) %>%
+  mutate(medium = 100*medium_dep_va/total) %>%
+  mutate(high = 100*high_dep_va/total) %>%
+  select(-c(low_dep_va,medium_dep_va,high_dep_va,total)) %>%
+  pivot_longer(-c(year,scope,region),names_to = "va_dependency",values_to = "va") %>%
+  mutate(va_dependency = factor(va_dependency,levels=c("low","medium","high"))) %>%
+  mutate(scope = factor(scope,levels=c("direct","upstream","downstream")))
+
+ggplot(tr,aes(y=va,x=year,fill=va_dependency)) + geom_area() +
+  scale_fill_manual(values=c("goldenrod1","darkorange2","red"),
+                    guide = guide_legend(reverse = TRUE))+
+  labs(title="Value added dependency on nature over time",
+       subtitle="% of [by-scope] GVA") +
+  scale_x_continuous(breaks = unique(tr$year))+
+  theme_bw() +
+  facet_grid(region~scope) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+# 6. Next Steps
+
+...
