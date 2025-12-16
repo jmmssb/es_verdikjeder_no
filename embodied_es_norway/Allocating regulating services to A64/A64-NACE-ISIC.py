@@ -1,5 +1,5 @@
 import re
-from pathlib import Path
+from pathlib import Path 
 import pandas as pd
 
 A64_SRC = Path(r"C:\Users\dth\OneDrive - Statistisk sentralbyrå\VSCode\ENCORE\A64 - NACE codes.csv")
@@ -43,8 +43,12 @@ def build_concordance(a64_df: pd.DataFrame, nace_df: pd.DataFrame) -> pd.DataFra
                     # Single digit pattern like "1" -> match only "1" or "1.x"
                     if code == pat_norm or re.match(rf'^{re.escape(pat_norm)}\.', code):
                         match = True
+                elif '.' in pat_norm:
+                    # Decimal pattern like "3.1" or "05.2" -> match "3.1", "3.11", "3.12", etc.
+                    if code == pat_norm or code.startswith(pat_norm):
+                        match = True
                 else:
-                    # Multi-digit or decimal pattern like "05" or "05.2" -> prefix match
+                    # Multi-digit pattern like "05" -> exact match or prefix with dot
                     if code == pat_norm or code.startswith(pat_norm + '.'):
                         match = True
                 

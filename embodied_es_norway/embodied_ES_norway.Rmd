@@ -15,17 +15,19 @@ table {
 }
 ```
 
-Magnus Merkle (SSB), with Marte Lindseth (SSB) and Kristine Grimsrud (SSB)
+Magnus Merkle (SSB), Marte Lindseth (SSB) and Kristine Grimsrud (SSB)
 
 Naturregnskapsprosjekt, 12. December 2025
+
+Version 2
 
 \
 
 # Changelog
 
-Changes since version 0:
+Changes since version 1:
 
--   Set up first version
+-   Added seperate ES accounts, weighted by employment
 
 # Abstract and limitation
 
@@ -277,9 +279,10 @@ Then import and aggregate the ES data.
 
 ```{r, results = 'hide', message = FALSE, warning=FALSE}
 # import data
-esd <- read_excel(file.path(efp,"ES by Industry in Norway.xlsx"), 
-                 sheet = "USE IND (A38) - ES (7)_ADJ")[-c(1,2),-1] %>% 
-  rename(es_sector = `...2`) %>%
+esdv <- read_excel(file.path(efp,"ES by Industry in Norway.xlsx"), 
+                 sheet = "ES by A64 and value added_adj")[-c(1,2),-1] %>% 
+  rename(es_sector = `Reference year (2021)`) %>%
+    filter(`Ecosystem services` !="Total value added") %>%
   select(-c("Ecosystem services","Global climate regulation","...12")) %>%
   mutate(`Crop provision` = as.numeric(`Crop provision`),
          `Pollination` = as.numeric(`Pollination`),
@@ -288,10 +291,36 @@ esd <- read_excel(file.path(efp,"ES by Industry in Norway.xlsx"),
          `Flood control` = as.numeric(`Flood control`),
          `Local climate regulation` = as.numeric(`Local climate regulation`),
          `Nature based tourism` = as.numeric(`Nature based tourism`))
-esd[is.na(esd)]<-0
+esdv[is.na(esdv)]<-0
 
 # now aggregate
-esd <- esd %>% 
+esdv <- esdv %>% 
+  left_join(scd,by=join_by(es_sector==es_name)) %>% 
+  select(-c(Comments,es_sector)) %>%
+  pivot_longer(-c(s_code,s_name),names_to="ES",values_to = "value") %>%
+  group_by(s_code,s_name,ES) %>% summarise(value=sum(value)) %>%
+  pivot_wider(names_from="ES",values_from="value") %>%
+  mutate(s_name=factor(s_name,levels=sector_names_c)) %>%
+  arrange(s_name)
+
+# same for the employment-weighted version
+# import data
+esde <- read_excel(file.path(efp,"ES by Industry in Norway.xlsx"), 
+                 sheet = "ES by A64 and employment_adj")[-c(1,2),-1] %>% 
+  rename(es_sector = `Reference year (2021)`) %>%
+    filter(`Ecosystem services` !="Employment by A64") %>%
+  select(-c("Ecosystem services")) %>%
+  mutate(`Crop provision` = as.numeric(`Crop provision`),
+         `Pollination` = as.numeric(`Pollination`),
+         `Wood provision` = as.numeric(`Wood provision`),
+         `Air filtration` = as.numeric(`Air filtration`),
+         `Flood control` = as.numeric(`Flood control`),
+         `Local climate regulation` = as.numeric(`Local climate regulation`),
+         `Nature based tourism` = as.numeric(`Nature based tourism`))
+esde[is.na(esde)]<-0
+
+# now aggregate
+esde <- esde %>% 
   left_join(scd,by=join_by(es_sector==es_name)) %>% 
   select(-c(Comments,es_sector)) %>%
   pivot_longer(-c(s_code,s_name),names_to="ES",values_to = "value") %>%
@@ -310,7 +339,6 @@ esd <- esd %>%
 Here we compute the leontief matrix based on Norwegian IOT.
 
 ```{r, results = 'hide', message = FALSE, warning=FALSE}
-###### version w/o trade #######################################################
 ##### First the technical coefficients matrix
 # first the inverse
 xinv<-xr^-1
@@ -334,32 +362,6 @@ I_a<-I-a
 leo<-solve(I_a)
 # clean up
 rm(I_a)
-
-# ###### version with trade ######################################################
-# ##### First the technical coefficients matrix
-# # first the inverse
-# xinv<-xtr^-1
-# xinvv<-as.vector(xinv)
-# xinvvd<-diag(xinvv)
-# # then the matrix
-# at <- mat.mult(Ztrc,xinvvd)
-# # clean up
-# rm(xinv,xinvv,xinvvd)
-# # check results. 
-# # check if any NAs. If so, then thats probably due to zero outputs. Confirm. Then turn NAs into zeros.
-# zocasest<-paste(round(100*length(a[is.na(a)])/length(a),digits = 2),"%",sep=" ")
-# #a[is.na(a)]<-0
-# 
-# ##### Then the Leontief matrix
-# # first we need an identity matrix
-# It<-diag(ncol(Ztrc))
-# # then I minus the technical coefficients matrix
-# I_a<-It-at
-# # then the leontief inverse
-# leot<-solve(I_a)
-# # clean up
-# rm(I_a)
-
 ```
 
 ## 3.2 Compute embodied ES
@@ -372,15 +374,20 @@ Here we compute the amount of ecosystem services embodied in final consumption b
 ld<-list()
 for(i in 1:7){
   # get ES account
-  esa<-(esd[,(i+2)]/xr) %>% as.matrix() %>% as.numeric() %>% matrix(nrow=1)
-  ld[[i]]<- as.data.frame(matrix(ncol=6,nrow=length(sector_codes_c)))
-  colnames(ld[[i]])<-c("ES","sector_c","sector_n","embodied_finaldem","embodied_exports","embodied_gcf")
-  ld[[i]]$ES <- colnames(esd)[i+2]
+  esav<-(esdv[,(i+2)]/xr) %>% as.matrix() %>% as.numeric() %>% matrix(nrow=1)
+  esae<-(esde[,(i+2)]/xr) %>% as.matrix() %>% as.numeric() %>% matrix(nrow=1)
+  ld[[i]]<- as.data.frame(matrix(ncol=9,nrow=length(sector_codes_c)))
+  colnames(ld[[i]])<-c("ES","sector_c","sector_n","embodied_finaldem_v","embodied_exports_v","embodied_gcf_v",
+                       "embodied_finaldem_e","embodied_exports_e","embodied_gcf_e")
+  ld[[i]]$ES <- colnames(esdv)[i+2]
   ld[[i]]$sector_c <- sector_codes_c
   ld[[i]]$sector_n <- sector_names_c
-  ld[[i]]$embodied_finaldem <- as.vector(esa %*% leo %*% diag(as.vector(fdr)))
-  ld[[i]]$embodied_exports <- as.vector(esa %*% leo %*% diag(as.vector(fer)))
-  ld[[i]]$embodied_gcf <- as.vector(esa %*% leo %*% diag(as.vector(fcr)))
+  ld[[i]]$embodied_finaldem_v <- as.vector(esav %*% leo %*% diag(as.vector(fdr)))
+  ld[[i]]$embodied_exports_v <- as.vector(esav %*% leo %*% diag(as.vector(fer)))
+  ld[[i]]$embodied_gcf_v <- as.vector(esav %*% leo %*% diag(as.vector(fcr)))
+    ld[[i]]$embodied_finaldem_e <- as.vector(esae %*% leo %*% diag(as.vector(fdr)))
+  ld[[i]]$embodied_exports_e <- as.vector(esae %*% leo %*% diag(as.vector(fer)))
+  ld[[i]]$embodied_gcf_e <- as.vector(esae %*% leo %*% diag(as.vector(fcr)))
 }
 rdf <- do.call("rbind",ld)
 rm(ld)
@@ -421,7 +428,14 @@ rdfp <- rdf %>%
                                                "Accommodation and food service",
                                                "Other services",
                                                "Public services"))) %>%
-  mutate(item=recode(item,"embodied_exports" = "Exports","embodied_finaldem" = "Domestic Final Demand","embodied_gcf" = "Domestic Net Capital Formation")) %>%
+  mutate(es_weight = "value_added") %>%
+  mutate(es_weight = replace(es_weight,item %in% c("embodied_exports_e","embodied_finaldem_e","embodied_gcf_e"),"employment")) %>%
+  mutate(item=recode(item,"embodied_exports_v" = "Exports",
+                     "embodied_finaldem_v" = "Domestic Final Demand",
+                     "embodied_gcf_v" = "Domestic Net Capital Formation",
+                     "embodied_exports_e" = "Exports",
+                     "embodied_finaldem_e" = "Domestic Final Demand",
+                     "embodied_gcf_e" = "Domestic Net Capital Formation")) %>%
   mutate(item = factor(item,levels=c("Domestic Final Demand","Exports","Domestic Net Capital Formation")))
 ```
 
@@ -431,8 +445,9 @@ rdfp <- rdf %>%
 
 We make a function for this.
 ```{r, results = 'hide', message = FALSE, warning=FALSE}
-es_emb_plot<-function(ecos,unites){
-  ggplot(rdfp %>% filter(ES==ecos),aes(y=value,x=agg_groups,fill=agg_groups)) +
+es_emb_plot<-function(ecos,unites,w="value_added"){
+  ggplot(rdfp %>% filter(es_weight == w) %>% 
+           filter(ES==ecos),aes(y=value,x=agg_groups,fill=agg_groups)) +
   geom_bar(stat="identity") +
   scale_fill_viridis_d()+
   theme_bw()+
@@ -448,38 +463,87 @@ es_emb_plot<-function(ecos,unites){
 ```
 
 # 4.2 Crop provision
+
+Version based on value_added ES weight.
 ```{r,message = FALSE, results = 'hide'}
-es_emb_plot(ecos="Crop provision",unites="k tonnes")
+es_emb_plot(ecos="Crop provision",unites="k tonnes",w="value_added")
+```
+
+Version based on employment ES weight.
+```{r,message = FALSE, results = 'hide'}
+es_emb_plot(ecos="Crop provision",unites="k tonnes",w="employment")
 ```
 
 # 4.3 Pollination
+
+Version based on value_added ES weight.
 ```{r,message = FALSE, results = 'hide'}
-es_emb_plot(ecos="Pollination",unites="k tonnes")
+es_emb_plot(ecos="Pollination",unites="k tonnes",w="value_added")
+```
+
+Version based on employment ES weight.
+```{r,message = FALSE, results = 'hide'}
+es_emb_plot(ecos="Pollination",unites="k tonnes",w="employment")
 ```
 
 # 4.4 Wood provision
+
+Version based on value_added ES weight.
 ```{r,message = FALSE, results = 'hide'}
-es_emb_plot(ecos="Wood provision",unites="k cubic metres")
+es_emb_plot(ecos="Wood provision",unites="k cubic metres",w="value_added")
+```
+
+Version based on employment ES weight.
+```{r,message = FALSE, results = 'hide'}
+es_emb_plot(ecos="Wood provision",unites="k cubic metres",w="employment")
 ```
 
 # 4.5 Air filtration
+
+Version based on value added ES weight.
 ```{r,message = FALSE, results = 'hide'}
-es_emb_plot(ecos="Air filtration",unites="Tonnes PM2.5")
+es_emb_plot(ecos="Air filtration",unites="Tonnes PM2.5",w="value_added")
+```
+
+Version based on employment ES weight.
+```{r,message = FALSE, results = 'hide'}
+es_emb_plot(ecos="Air filtration",unites="Tonnes PM2.5",w="employment")
 ```
 
 # 4.6 Flood control
+
+Version based on value added ES weight.
 ```{r,message = FALSE, results = 'hide'}
-es_emb_plot(ecos="Flood control",unites="hectares")
+es_emb_plot(ecos="Flood control",unites="hectares",w="value_added")
+```
+
+Version based on employment ES weight.
+```{r,message = FALSE, results = 'hide'}
+es_emb_plot(ecos="Flood control",unites="hectares",w="employment")
 ```
 
 # 4.7 Local climate regulation
+
+Version based on value added ES weight.
 ```{r,message = FALSE, results = 'hide'}
-es_emb_plot(ecos="Local climate regulation",unites="degrees")
+es_emb_plot(ecos="Local climate regulation",unites="degrees",w="value_added")
+```
+
+Version based on employment ES weight.
+```{r,message = FALSE, results = 'hide'}
+es_emb_plot(ecos="Local climate regulation",unites="degrees",w="employment")
 ```
 
 # 4.8 Nature-based tourism
+
+Version based on value added ES weight.
 ```{r,message = FALSE, results = 'hide'}
-es_emb_plot(ecos="Nature based tourism",unites="overnight stays")
+es_emb_plot(ecos="Nature based tourism",unites="overnight stays",w="value_added")
+```
+
+Version based on employment ES weight.
+```{r,message = FALSE, results = 'hide'}
+es_emb_plot(ecos="Nature based tourism",unites="overnight stays",w="employment")
 ```
 
 # 5. Conclusion and outlook
